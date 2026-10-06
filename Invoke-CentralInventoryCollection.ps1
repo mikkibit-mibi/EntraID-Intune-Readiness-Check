@@ -12,13 +12,6 @@
     - CSV-Export statt API
     - Hardware-Kompatibilität für Entra ID/Intune
     - Automatische Standort-Erkennung via IP
-    
-    Kompatibilitätsprüfung:
-    - TPM 2.0 erforderlich
-    - Secure Boot erforderlich
-    - Windows 10/11 (Build >= 14393)
-    - 4GB+ RAM
-    - 64-bit Architektur
 
 .PARAMETER CsvPath
     Netzwerk-Pfad für CSV-Export (z.B. \\fileserver\inventory\)
@@ -33,17 +26,12 @@
     Standard: $false
 
 .EXAMPLE
-    # Für GPO (als SYSTEM):
-    .\Invoke-InventoryCollection.ps1 -CsvPath "\\fileserver\inventory\"
-
-.EXAMPLE
-    # Für Debugging:
-    .\Invoke-InventoryCollection.ps1 -LocalOnly $true -Verbose $true
+    .\Invoke-CentralInventoryCollection.ps1 -CsvPath "\\fileserver\inventory\"
 #>
 
 param(
     [Parameter(Mandatory=$false)]
-    [string]$CsvPath = "",
+    [string]$CsvPath = "\\roemergarten.local\netlogon\pccollect",
     
     [Parameter(Mandatory=$false)]
     [bool]$LocalOnly = $false,
@@ -56,17 +44,11 @@ param(
 # KONFIGURATION
 # ============================================================================
 
-# Standard-Pfade
-if ([string]::IsNullOrEmpty($CsvPath)) {
-    $CsvPath = "C:\Temp\Inventory"
-}
-
 $Script:LocalCachePath = "C:\ProgramData\Inventory"
 $Script:LogFile = ""
 $Script:LockFile = Join-Path -Path $Script:LocalCachePath -ChildPath "inventory.lock"
 
 # Standort-Mapping (IP-Präfix -> Standort)
-# Anpassen Sie diese Zuordnung an Ihre Netzwerk-Struktur!
 $Script:LocationMapping = @{
     "192.168.1." = "Standort-A"
     "192.168.2." = "Standort-B"
@@ -78,10 +60,10 @@ $Script:LocationMapping = @{
 
 # Entra ID/Intune Kompatibilitäts-Anforderungen
 $Script:Compatibility = @{
-    "MinWindowsBuild" = 14393        # Windows 10
+    "MinWindowsBuild" = 14393
     "MinRAMGB" = 4
     "RequireTPM20" = $true
-    "RequireSecureBoot" = $false      # Oft deaktiviert, aber empfohlen
+    "RequireSecureBoot" = $false
     "RequireUEFI" = $false
     "Require64Bit" = $true
 }
@@ -91,21 +73,14 @@ $Script:Compatibility = @{
 # ============================================================================
 
 function Initialize-Environment {
-    <#
-    .SYNOPSIS
-        Initialisiert Verzeichnisse und Logging
-    #>
-    # Erstelle lokale Cache-Verzeichnisse
     if (-not (Test-Path $Script:LocalCachePath)) {
         New-Item -ItemType Directory -Path $Script:LocalCachePath -Force | Out-Null
     }
     
-    # Erstelle CSV-Ausgabe-Verzeichnis
     if (-not (Test-Path $CsvPath)) {
         New-Item -ItemType Directory -Path $CsvPath -Force | Out-Null
     }
     
-    # Setup Log-Datei
     if ($Verbose) {
         $logDir = Join-Path -Path $Script:LocalCachePath -ChildPath "Logs"
         if (-not (Test-Path $logDir)) {
@@ -116,10 +91,6 @@ function Initialize-Environment {
 }
 
 function Write-Log {
-    <#
-    .SYNOPSIS
-        Schreibt Log-Einträge
-    #>
     param(
         [string]$Message,
         [string]$Level = "INFO"
@@ -137,14 +108,10 @@ function Write-Log {
 # ============================================================================
 
 function Test-LockFile {
-    <#
-    .SYNOPSIS
-        Prüft ob bereits ein Inventory läuft
-    #>
     if (Test-Path $Script:LockFile) {
         $lockAge = ((Get-Date) - (Get-Item $Script:LockFile).LastWriteTime).TotalMinutes
         if ($lockAge -lt 5) {
-            Write-Log "Inventory läuft bereits, überspringe" "WARN"
+            Write-Log "Inventory laeuft bereits, ueberspringe" "WARN"
             return $true
         }
         else {
@@ -165,12 +132,7 @@ function Remove-LockFile {
 # ============================================================================
 
 function Get-LocationFromIP {
-    <#
-    .SYNOPSIS
-        Bestimmt Standort basierend auf IP-Adresse
-    #>
     try {
-        # Hole alle aktiven Netzwerk-Adapter mit IP
         $nics = Get-CimInstance -ClassName Win32_NetworkAdapterConfiguration `
             -Filter "IPEnabled=true" -ErrorAction SilentlyContinue
         
@@ -185,11 +147,9 @@ function Get-LocationFromIP {
         $primaryIP = $null
         $allIPs = @()
         
-        # Sammle alle IPs
         foreach ($nic in $nics) {
             if ($nic.IPAddress) {
                 foreach ($ip in $nic.IPAddress) {
-                    # Ignoriere IPv6 und loopback
                     if ($ip -match "^\d+\.\d+\.\d+\.\d+$" -and $ip -ne "127.0.0.1") {
                         $allIPs += $ip
                         if (-not $primaryIP) {
@@ -208,7 +168,6 @@ function Get-LocationFromIP {
             }
         }
         
-        # Bestimme Standort basierend auf IP-Präfix
         $detectedLocation = "Unknown"
         
         foreach ($prefix in $Script:LocationMapping.Keys) {
@@ -232,7 +191,6 @@ function Get-LocationFromIP {
             "Location" = "Error"
             "PrimaryIP" = "N/A"
             "AllIPs" = @()
-            "Error" = $_.Exception.Message
         }
     }
 }
@@ -242,10 +200,6 @@ function Get-LocationFromIP {
 # ============================================================================
 
 function Get-ComputerBasics {
-    <#
-    .SYNOPSIS
-        Sammelt Basis-Computerinformationen
-    #>
     try {
         $computerSystem = Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop
         
@@ -265,10 +219,6 @@ function Get-ComputerBasics {
 }
 
 function Get-BIOSInfo {
-    <#
-    .SYNOPSIS
-        Sammelt BIOS/Firmware Informationen
-    #>
     try {
         $bios = Get-CimInstance -ClassName Win32_BIOS -ErrorAction SilentlyContinue
         
@@ -290,10 +240,6 @@ function Get-BIOSInfo {
 }
 
 function Get-CPUInfo {
-    <#
-    .SYNOPSIS
-        Sammelt CPU-Informationen
-    #>
     try {
         $cpu = Get-CimInstance -ClassName Win32_Processor -ErrorAction SilentlyContinue | Select-Object -First 1
         
@@ -316,10 +262,6 @@ function Get-CPUInfo {
 }
 
 function Get-RAMInfo {
-    <#
-    .SYNOPSIS
-        Sammelt RAM-Informationen
-    #>
     try {
         $physicalMemory = Get-CimInstance -ClassName Win32_PhysicalMemory -ErrorAction SilentlyContinue
         
@@ -348,10 +290,6 @@ function Get-RAMInfo {
 }
 
 function Get-OSInfo {
-    <#
-    .SYNOPSIS
-        Sammelt Betriebssystem-Informationen
-    #>
     try {
         $os = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction SilentlyContinue
         
@@ -375,10 +313,6 @@ function Get-OSInfo {
 }
 
 function Get-StorageInfo {
-    <#
-    .SYNOPSIS
-        Sammelt Speicher-Informationen
-    #>
     try {
         $disks = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DriveType=3" -ErrorAction SilentlyContinue
         
@@ -414,10 +348,6 @@ function Get-StorageInfo {
 # ============================================================================
 
 function Get-TPMInfo {
-    <#
-    .SYNOPSIS
-        Prüft TPM 2.0 Verfügbarkeit und Status
-    #>
     try {
         $tpm = Get-CimInstance -ClassName Win32_Tpm `
             -Namespace "root\cimv2\security\microsofttpm" `
@@ -448,10 +378,6 @@ function Get-TPMInfo {
 }
 
 function Get-SecureBootInfo {
-    <#
-    .SYNOPSIS
-        Prüft Secure Boot Status
-    #>
     try {
         $secureBootStatus = Confirm-SecureBootUEFI -ErrorAction SilentlyContinue
         
@@ -460,7 +386,6 @@ function Get-SecureBootInfo {
         }
     }
     catch {
-        # Secure Boot ist wahrscheinlich deaktiviert oder nicht unterstützt
         return @{
             "SecureBootEnabled" = $false
         }
@@ -468,14 +393,7 @@ function Get-SecureBootInfo {
 }
 
 function Get-UEFIInfo {
-    <#
-    .SYNOPSIS
-        Prüft UEFI Firmware
-    #>
     try {
-        $firmware = Get-CimInstance -ClassName Win32_SystemFirmware -ErrorAction SilentlyContinue
-        
-        # Alternative: Registry-Check
         if (Test-Path "HKLM:\System\CurrentControlSet\Control\SecureBoot\State") {
             $uefiBoot = $true
         }
@@ -495,10 +413,6 @@ function Get-UEFIInfo {
 }
 
 function Get-BitLockerInfo {
-    <#
-    .SYNOPSIS
-        Prüft BitLocker Status
-    #>
     try {
         $bitLocker = Get-BitLockerVolume -ErrorAction SilentlyContinue
         
@@ -531,10 +445,6 @@ function Get-BitLockerInfo {
 # ============================================================================
 
 function Get-ADStatus {
-    <#
-    .SYNOPSIS
-        Prüft Active Directory Status
-    #>
     try {
         $computerSystem = Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction SilentlyContinue
         
@@ -552,10 +462,6 @@ function Get-ADStatus {
 }
 
 function Get-EntraIDStatus {
-    <#
-    .SYNOPSIS
-        Prüft Entra ID / Azure AD Join Status
-    #>
     try {
         $dsregOutput = & dsregcmd /status 2>$null
         
@@ -599,14 +505,9 @@ function Get-EntraIDStatus {
 }
 
 function Get-IntuneStatus {
-    <#
-    .SYNOPSIS
-        Prüft Intune MDM Registrierung
-    #>
     try {
         $intuneRegistered = $false
         
-        # Prüfe Registry
         $mdmPath = "HKLM:\SOFTWARE\Microsoft\Enrollments"
         if (Test-Path $mdmPath) {
             $enrollments = Get-ChildItem -Path $mdmPath -ErrorAction SilentlyContinue | `
@@ -614,7 +515,6 @@ function Get-IntuneStatus {
             $intuneRegistered = $enrollments.Count -gt 0
         }
         
-        # Alternative: WMI
         if (-not $intuneRegistered) {
             $mdmWmi = Get-CimInstance -Namespace "root\cimv2\mdm\dmmap" `
                 -ClassName "DMClient" -ErrorAction SilentlyContinue
@@ -634,15 +534,10 @@ function Get-IntuneStatus {
 }
 
 # ============================================================================
-# FUNKTIONEN - KOMPATIBILITÄTSPRÜFUNG
+# FUNKTIONEN - KOMPATIBILITAETSPRÜFUNG
 # ============================================================================
 
 function Test-EntraIDIntuneCompatibility {
-    <#
-    .SYNOPSIS
-        Prüft Kompatibilität für Entra ID / Intune
-        Gibt detaillierten Status mit Fehlern zurück
-    #>
     param(
         [hashtable]$HardwareInfo
     )
@@ -651,7 +546,6 @@ function Test-EntraIDIntuneCompatibility {
     $issues = @()
     $recommendations = @()
     
-    # Prüfe Windows Build
     if ($HardwareInfo.OSBuild) {
         $buildNumber = [int]$HardwareInfo.OSBuild
         if ($buildNumber -lt $Script:Compatibility["MinWindowsBuild"]) {
@@ -660,7 +554,6 @@ function Test-EntraIDIntuneCompatibility {
         }
     }
     
-    # Prüfe RAM
     if ($HardwareInfo.RAMTotalGB) {
         if ($HardwareInfo.RAMTotalGB -lt $Script:Compatibility["MinRAMGB"]) {
             $compatible = $false
@@ -668,15 +561,13 @@ function Test-EntraIDIntuneCompatibility {
         }
     }
     
-    # Prüfe Architektur
     if ($HardwareInfo.OSArchitecture) {
         if ($Script:Compatibility["Require64Bit"] -and $HardwareInfo.OSArchitecture -notmatch "64") {
             $compatible = $false
-            $issues += "32-Bit OS nicht unterstützt"
+            $issues += "32-Bit OS nicht unterstuetzt"
         }
     }
     
-    # Prüfe TPM 2.0
     if ($Script:Compatibility["RequireTPM20"]) {
         if (-not $HardwareInfo.TPM20Present) {
             $compatible = $false
@@ -684,7 +575,6 @@ function Test-EntraIDIntuneCompatibility {
         }
     }
     
-    # Warnungen für empfohlene Features
     if (-not $HardwareInfo.SecureBootEnabled) {
         $recommendations += "Secure Boot wird empfohlen"
     }
@@ -697,7 +587,7 @@ function Test-EntraIDIntuneCompatibility {
         "Compatible" = $compatible
         "Issues" = $issues -join "; "
         "Recommendations" = $recommendations -join "; "
-        "Status" = if ($compatible) { "✓ Kompatibel" } else { "✗ Nicht kompatibel" }
+        "Status" = if ($compatible) { "JA - Kompatibel" } else { "NEIN - Nicht kompatibel" }
     }
 }
 
@@ -706,10 +596,6 @@ function Test-EntraIDIntuneCompatibility {
 # ============================================================================
 
 function Export-ToCSV {
-    <#
-    .SYNOPSIS
-        Exportiert alle gesammelten Daten als CSV
-    #>
     param(
         [hashtable]$InventoryData
     )
@@ -720,7 +606,6 @@ function Export-ToCSV {
         $filename = "inventory_${computerName}_${timestamp}.csv"
         $filepath = Join-Path -Path $CsvPath -ChildPath $filename
         
-        # Flache CSV-Struktur für einfache Auswertung
         $csvObject = [PSCustomObject]@{
             "Timestamp"                    = Get-Date -Format "o"
             "ComputerName"                 = $InventoryData.Basics.ComputerName
@@ -778,17 +663,14 @@ function Export-ToCSV {
 # ============================================================================
 
 try {
-    # Initialisierung
     Initialize-Environment
     Write-Log "=== Inventory Collection gestartet ===" "INFO"
     
-    # Prüfe Lock-File
     if (Test-LockFile) {
-        Write-Log "Inventory läuft bereits, beende" "WARN"
+        Write-Log "Inventory laeuft bereits, beende" "WARN"
         exit 0
     }
     
-    # Sammle Daten
     Write-Log "Sammle Standort..." "INFO"
     $locationData = Get-LocationFromIP
     
@@ -810,18 +692,17 @@ try {
     Write-Log "Sammle Speicher-Info..." "INFO"
     $storageData = Get-StorageInfo
     
-    Write-Log "Prüfe Security Features..." "INFO"
+    Write-Log "Pruefen Security Features..." "INFO"
     $tpmData = Get-TPMInfo
     $secureBootData = Get-SecureBootInfo
     $uefiData = Get-UEFIInfo
     $bitlockerData = Get-BitLockerInfo
     
-    Write-Log "Prüfe Cloud/Identity Status..." "INFO"
+    Write-Log "Pruefen Cloud/Identity Status..." "INFO"
     $adData = Get-ADStatus
     $entraIDData = Get-EntraIDStatus
     $intuneData = Get-IntuneStatus
     
-    # Kombiniere Hardware-Daten
     $hardwareInfo = @{}
     $hardwareInfo += $osData
     $hardwareInfo += $ramData
@@ -830,11 +711,9 @@ try {
     $hardwareInfo += $secureBootData
     $hardwareInfo += $uefiData
     
-    # Prüfe Kompatibilität
-    Write-Log "Prüfe Entra ID / Intune Kompatibilität..." "INFO"
+    Write-Log "Pruefen Entra ID / Intune Kompatibilitaet..." "INFO"
     $compatibilityCheck = Test-EntraIDIntuneCompatibility -HardwareInfo $hardwareInfo
     
-    # Kombiniere alles
     $inventoryData = @{
         "Basics"        = $basicsData
         "BIOS"          = $biosData
@@ -850,47 +729,8 @@ try {
         "Compatibility" = $compatibilityCheck
     }
     
-    # Exportiere zu CSV
     Write-Log "Exportiere zu CSV..." "INFO"
     $csvPath = Export-ToCSV -InventoryData $inventoryData
-    
-    # Konsolen-Ausgabe
-    if ($Verbose) {
-        Write-Host ""
-        Write-Host "╔════════════════════════════════════════════════════════════╗" -ForegroundColor Green
-        Write-Host "║  INVENTORY COLLECTION ABGESCHLOSSEN" -ForegroundColor Green
-        Write-Host "╚════════════════════════════════════════════════════════════╝" -ForegroundColor Green
-        Write-Host ""
-        Write-Host "💻 Computer: $($inventoryData.Basics.ComputerName)" -ForegroundColor Cyan
-        Write-Host "📍 Standort: $($inventoryData.Location.Location)" -ForegroundColor Cyan
-        Write-Host "🌐 IP: $($inventoryData.Location.PrimaryIP)" -ForegroundColor Cyan
-        Write-Host ""
-        Write-Host "📊 Hardware:" -ForegroundColor Yellow
-        Write-Host "  OS: $($inventoryData.OS.OSName) Build $($inventoryData.OS.OSBuild)"
-        Write-Host "  CPU: $($inventoryData.CPU.CPUName) ($($inventoryData.CPU.CPUCores) Cores)"
-        Write-Host "  RAM: $($inventoryData.RAM.RAMTotalGB)GB"
-        Write-Host ""
-        Write-Host "☁️ Cloud Status:" -ForegroundColor Yellow
-        Write-Host "  AD: $(if ($inventoryData.AD.ADMember) { '✓' } else { '✗' }) $($inventoryData.AD.ADDomain)"
-        Write-Host "  Entra ID: $(if ($inventoryData.EntraID.AzureADJoined) { '✓' } else { '✗' }) $($inventoryData.EntraID.AzureADJoinType)"
-        Write-Host "  Intune: $(if ($inventoryData.Intune.IntuneRegistered) { '✓' } else { '✗' })"
-        Write-Host ""
-        Write-Host "🔒 Sicherheit:" -ForegroundColor Yellow
-        Write-Host "  TPM 2.0: $(if ($inventoryData.Security.TPM20Present) { '✓' } else { '✗' })"
-        Write-Host "  Secure Boot: $(if ($inventoryData.Security.SecureBootEnabled) { '✓' } else { '✗' })"
-        Write-Host "  BitLocker: $(if ($inventoryData.Security.BitLockerEnabled) { '✓' } else { '✗' })"
-        Write-Host ""
-        Write-Host "✅ Entra ID / Intune: $($inventoryData.Compatibility.Status)" -ForegroundColor $(if ($inventoryData.Compatibility.Compatible) { "Green" } else { "Red" })
-        if ($inventoryData.Compatibility.Issues) {
-            Write-Host "  ❌ Probleme: $($inventoryData.Compatibility.Issues)" -ForegroundColor Red
-        }
-        if ($inventoryData.Compatibility.Recommendations) {
-            Write-Host "  ⚠️  Empfehlungen: $($inventoryData.Compatibility.Recommendations)" -ForegroundColor Yellow
-        }
-        Write-Host ""
-        Write-Host "💾 CSV exportiert: $csvPath" -ForegroundColor Green
-        Write-Host ""
-    }
 }
 catch {
     Write-Log "Kritischer Fehler: $_" "ERROR"
